@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import type { ConversationMessageCardProps, ConversationThreadProps } from "./conversation-thread-types";
 import { ThreadMessageActions } from "./thread-message-actions";
 import { MessageOpenStatus } from "./message-open-status";
+import { MessageFollowUpStatus } from "@/components/follow-ups/message-follow-up-status";
 import {
 	getConversationRecipients,
 	getConversationSender,
@@ -217,6 +218,7 @@ export function ConversationMessageCard({
 				{expanded && body && (
 					<div className="pb-4 pt-2 sm:pl-16">
 						{outbound && <MessageOpenStatus messageId={message.id} />}
+						{outbound && message.status !== "draft" && <MessageFollowUpStatus messageId={message.id} />}
 						{body.html ? (
 							<EmailHtmlRenderer html={body.html} autoAllowRemote={remote.autoAllow} onAllowRemote={remote.allowSender} />
 						) : (

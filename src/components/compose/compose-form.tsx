@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
-import { ChevronUp, Eye, EyeOff, FileText, Forward, Maximize2, Minimize2, Minus, Paperclip, Reply, Trash2, X } from "lucide-react";
+import { BellRing, ChevronUp, Eye, EyeOff, FileText, Forward, Maximize2, Minimize2, Minus, Paperclip, Reply, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useLanguage } from "@/components/language-provider";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,8 @@ import type { ReviewSnapshot } from "@/components/agent/send-review-types";
 import { useIsMobile } from "@/components/sidebar-mobile-utils";
 import { useSheetViewport } from "./use-sheet-viewport";
 import { useTrackOpens } from "./use-track-opens";
+import { FollowUpMenu } from "@/components/follow-ups/follow-up-menu";
+import { followUpOptionKey } from "@/components/follow-ups/follow-up-client-utils";
 import { buildSendFormData, fetchDraft, formatAttachmentSize } from "./utils";
 import { RecipientInput } from "./recipient-input";
 import { RichTextEditor } from "./rich-text-editor";
@@ -78,6 +80,7 @@ export function ComposeForm({
 	const [deletingDraft, setDeletingDraft] = useState(false);
 	const [scheduledAt, setScheduledAt] = useState<Date | null>(null);
 	const [trackOpens, setTrackOpens] = useTrackOpens();
+	const [followUpDays, setFollowUpDays] = useState<number | null>(null);
 	const [loadedDraftMailboxId, setLoadedDraftMailboxId] = useState<string | null>(null);
 	const [loadedDraftFrom, setLoadedDraftFrom] = useState<string | null>(null);
 	const [selectedFrom, setSelectedFrom] = useState("");
@@ -384,6 +387,7 @@ export function ComposeForm({
 					scheduledAt,
 					undoSend: true,
 					trackOpens,
+					followUpDays,
 				}),
 			});
 			data = (await res.json()) as { messageId?: string; scheduled?: boolean; undoSeconds?: number; error?: string };
@@ -836,6 +840,25 @@ export function ComposeForm({
 								>
 									{trackOpens ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
 								</button>
+							</Tooltip>
+							<Tooltip label={followUpDays ? t("followUp.remindOn", { when: t(followUpOptionKey(followUpDays)) }) : t("followUp.remindMe")}>
+								<FollowUpMenu
+									disabled={loading || loadingDraft}
+									onPick={setFollowUpDays}
+									onClear={followUpDays ? () => setFollowUpDays(null) : undefined}
+									trigger={
+										<button
+											type="button"
+											aria-label={t("followUp.remindMe")}
+											className={cn(
+												"rounded-md p-1.5 hover:bg-neutral-100 disabled:pointer-events-none disabled:opacity-50 max-md:px-2",
+												followUpDays ? "text-amber-600 hover:text-amber-700" : "text-neutral-500 hover:text-neutral-900",
+											)}
+										>
+											<BellRing className="h-4 w-4" />
+										</button>
+									}
+								/>
 							</Tooltip>
 							<span className="flex-1 max-md:hidden" />
 							<Tooltip label={t("compose.deleteDraft")}>

@@ -15,6 +15,7 @@ import { getOutboundAttachmentMaxMb } from "@/lib/email/attachment-policy";
 import { getOutboundProviderConfig, sendThroughProvider } from "@/lib/email/outbound-provider";
 import { prepareCloudflareAttachments } from "@/lib/email/cloud-attachment-utils";
 import { ensureTrackingToken, getTrackingHostForSender } from "@/lib/tracking/open-tracking";
+import { setFollowUp } from "@/lib/follow-ups/service";
 import { buildTrackingPixelUrl, injectTrackingPixel, resolveTrackingOrigin } from "@/lib/tracking/open-tracking-utils";
 
 export type SendEmailInput = {
@@ -42,6 +43,8 @@ export type SendEmailInput = {
 	undoSend?: boolean;
 	/** Add a read-receipt pixel to the HTML part (the stored Sent copy stays without it). */
 	trackOpens?: boolean;
+	/** Bring the thread back to the inbox after this many days unless a reply arrives. */
+	followUpDays?: number;
 	publicOrigin?: string;
 };
 
@@ -245,6 +248,10 @@ async function deliverEmail(env: CloudflareEnv, delivery: PreparedDelivery): Pro
 			})
 			.where(eq(messages.id, messageId));
 		await db.update(outboundJobs).set({ status: "sent", updatedAt: new Date() }).where(eq(outboundJobs.id, jobId));
+		if (input.followUpDays) {
+			// The message is already out; a reminder that cannot be stored must not fail the send.
+			await setFollowUp(env, { messageId, userId: input.userId, days: input.followUpDays }).catch((error) => console.error("Follow-up reminder skipped", error));
+		}
 
 		await dispatchWebhooks(env, input.userId, "message.outbound", {
 			messageId,

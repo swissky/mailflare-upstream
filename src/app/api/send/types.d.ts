@@ -20,4 +20,6 @@ export interface SendRequestPayload {
 	undoSend?: boolean;
 	/** Add a read-receipt pixel. */
 	trackOpens?: boolean;
+	/** Remind the sender after this many days without a reply. */
+	followUpDays?: number;
 }

@@ -49,6 +49,7 @@ import {
 	supportsPermanentDelete,
 } from "@/lib/messages/permanent-delete-utils";
 import clsx from "clsx";
+import { DueFollowUps } from "@/components/follow-ups/due-follow-ups";
 
 const pageSize = 25;
 
@@ -587,6 +588,7 @@ export function MessageFolderPage({
 			)}
 
 			<div className="min-h-0 flex-1 overflow-y-auto overscroll-contain scrollbar-gutter-stable">
+				{config.folder === "inbox" && !config.folderId && offset === 0 && !mailboxesLoading && <DueFollowUps mailboxId={selectedMailbox?.id} />}
 				<div role="list" aria-label={title} className="divide-y divide-neutral-100">
 					{messages.map((message) => (
 						<MessageListRow

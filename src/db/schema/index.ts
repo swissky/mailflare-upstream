@@ -470,6 +470,27 @@ export const messageOpens = sqliteTable(
 	(t) => [index("message_opens_token_idx").on(t.token, t.openedAt)],
 );
 
+/**
+ * "Remind me if there is no reply": a sent message whose thread comes back to the
+ * inbox at `dueAt` unless an inbound message joined the thread after it.
+ */
+export const followUps = sqliteTable(
+	"follow_ups",
+	{
+		id: text("id").primaryKey(),
+		messageId: text("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+		userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+		dueAt: integer("due_at", { mode: "timestamp" }).notNull(),
+		status: text("status", { enum: ["pending", "due", "replied", "dismissed"] }).notNull().default("pending"),
+		createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+	},
+	(t) => [
+		uniqueIndex("follow_ups_message_idx").on(t.messageId),
+		index("follow_ups_status_due_idx").on(t.status, t.dueAt),
+		index("follow_ups_user_status_idx").on(t.userId, t.status),
+	],
+);
+
 export const emailTemplates = sqliteTable(
 	"email_templates",
 	{
