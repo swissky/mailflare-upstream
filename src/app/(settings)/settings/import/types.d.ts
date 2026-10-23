@@ -44,6 +44,25 @@ export type ImportFolderSummary = {
 	name: string;
 };
 
+export type ImapImportJobStepInput = {
+	folder: string;
+	destination: string;
+	label: string;
+};
+
+export type ImapImportJobState = {
+	id: string;
+	status: "running" | "completed" | "failed" | "cancelled";
+	steps: (ImapImportJobStepInput & { total: number | null; processed: number })[];
+	stepIndex: number;
+	imported: number;
+	skipped: number;
+	errors: string[];
+	error: string | null;
+	cancelRequested: boolean;
+	stalled: boolean;
+};
+
 export type ImportProgress = {
 	completed: number;
 	label: string;

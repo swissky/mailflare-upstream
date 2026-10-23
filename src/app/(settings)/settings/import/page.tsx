@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Folder, Server, Upload } from "lucide-react";
 import { useLanguage } from "@/components/language-provider";
 import type { TranslationKey } from "@/lib/i18n/types";
@@ -21,6 +21,8 @@ import { Select } from "@/components/ui/select";
 import { importMessageFiles } from "@/components/settings/import-messages-utils";
 import type {
   ImapFormState,
+  ImapImportJobState,
+  ImapImportJobStepInput,
   ImportResult,
   ImportSourceItem,
   ImportSourceSection,
@@ -28,17 +30,25 @@ import type {
   ImportProgress,
 } from "./types";
 import {
+  cancelImapImportJob,
   ensureImportDestination,
   fetchImapFolders,
+  fetchImapImportJob,
   filterCustomImapFolders,
   formatImportResult,
   getFileImportSource,
   getFolderImportSource,
   getSelectedImportSources,
+  getStoredImapImportJobId,
   importFromImap,
   importSourceOptions,
   resolveImapSourceFolder,
+  resumeImapImportJob,
+  startImapImportJob,
+  storeImapImportJobId,
 } from "./utils";
+
+const IMAP_JOB_POLL_MS = 4000;
 
 const initialImapForm: ImapFormState = {
   host: "",
@@ -82,6 +92,45 @@ export default function SettingsImportPage() {
   const [imapError, setImapError] = useState<string | null>(null);
   const [imapLoading, setImapLoading] = useState(false);
   const [imapProgress, setImapProgress] = useState<ImportProgress | null>(null);
+  const [imapJob, setImapJob] = useState<ImapImportJobState | null>(null);
+  const [imapJobBusy, setImapJobBusy] = useState(false);
+  const lastImportedRef = useRef<number | null>(null);
+  const imapJobId = imapJob?.id;
+  const imapJobRunning = imapJob?.status === "running";
+
+  useEffect(() => {
+    const id = getStoredImapImportJobId();
+    if (!id) return;
+    fetchImapImportJob(id)
+      .then((job) => {
+        if (!job) return storeImapImportJobId(null);
+        setImapJob(job);
+        setActiveTab("imap");
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!imapJobId || !imapJobRunning) return;
+    const timer = window.setInterval(() => {
+      fetchImapImportJob(imapJobId)
+        .then((job) => {
+          if (job) setImapJob(job);
+        })
+        .catch(() => undefined);
+    }, IMAP_JOB_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [imapJobId, imapJobRunning]);
+
+  useEffect(() => {
+    if (!imapJob) return;
+    if (lastImportedRef.current !== null && imapJob.imported !== lastImportedRef.current) {
+      window.dispatchEvent(new Event("mailflare:messages-changed"));
+    }
+    lastImportedRef.current = imapJob.imported;
+    if (imapJob.status !== "running") storeImapImportJobId(null);
+  }, [imapJob]);
+
   const selectedSources = useMemo(
     () => getSelectedImportSources(selectedSections),
     [selectedSections],
@@ -143,6 +192,7 @@ export default function SettingsImportPage() {
     setImapLoading(true);
     setImapError(null);
     setImapResult(null);
+    setImapJob(null);
     setImapProgress({
       completed: 0,
       total: 1,
@@ -164,14 +214,32 @@ export default function SettingsImportPage() {
         }
       }
 
-      for (const [index, source] of expandedSources.entries()) {
+      const steps: ImapImportJobStepInput[] = [];
+      for (const source of expandedSources) {
+        steps.push({
+          folder: resolveImapSourceFolder(source, discoveredFolders),
+          destination: await getDestination(source),
+          label: sourceLabel(source),
+        });
+      }
+
+      const job = await startImapImportJob(selectedMailbox.id, imapForm, steps);
+      if (job) {
+        storeImapImportJobId(job.id);
+        lastImportedRef.current = null;
+        setImapJob(job);
+        setImapProgress(null);
+        setImapForm((current) => ({ ...current, password: "" }));
+        return;
+      }
+
+      // Without a job queue the browser drives the import one batch per request.
+      for (const [index, { folder, destination, label }] of steps.entries()) {
         setImapProgress({
           completed: index,
-          total: expandedSources.length,
-          label: t("importPage.importingSource", { source: sourceLabel(source) }),
+          total: steps.length,
+          label: t("importPage.importingSource", { source: label }),
         });
-        const destination = await getDestination(source);
-        const folder = resolveImapSourceFolder(source, discoveredFolders);
         let offset = 0;
         let processed = 0;
         // Newest messages first, one batch per request. Without "import all"
@@ -200,14 +268,14 @@ export default function SettingsImportPage() {
           offset = result.nextOffset;
           setImapProgress({
             completed: index,
-            total: expandedSources.length,
-            label: t("importPage.importingSourceProgress", { source: sourceLabel(source), processed, total: result.total ?? "?" }),
+            total: steps.length,
+            label: t("importPage.importingSourceProgress", { source: label, processed, total: result.total ?? "?" }),
           });
         }
         setImapProgress({
           completed: index + 1,
-          total: expandedSources.length,
-          label: t("importPage.importedSource", { source: sourceLabel(source) }),
+          total: steps.length,
+          label: t("importPage.importedSource", { source: label }),
         });
       }
       setImapResult(total);
@@ -221,6 +289,25 @@ export default function SettingsImportPage() {
       setImapLoading(false);
     }
   }
+
+  async function updateImapJob(action: (id: string) => Promise<ImapImportJobState>) {
+    if (!imapJob) return;
+    setImapJobBusy(true);
+    setImapError(null);
+    try {
+      const job = await action(imapJob.id);
+      if (job.status === "running") storeImapImportJobId(job.id);
+      setImapJob(job);
+    } catch (error) {
+      setImapError(error instanceof Error ? error.message : t("importPage.imapFailed"));
+    } finally {
+      setImapJobBusy(false);
+    }
+  }
+
+  const imapJobStep = imapJob?.steps[Math.min(imapJob.stepIndex, imapJob.steps.length - 1)];
+  const imapJobCompletedSteps = imapJob?.status === "completed" ? imapJob.steps.length : (imapJob?.stepIndex ?? 0);
+  const imapJobResumable = !!imapJob && (imapJob.status === "failed" || imapJob.stalled);
 
   return (
     <div className="space-y-6">
@@ -478,12 +565,87 @@ export default function SettingsImportPage() {
                       !imapForm.host ||
                       !imapForm.username ||
                       !imapForm.password ||
-                      imapLoading
+                      imapLoading ||
+                      imapJobRunning
                     }
                   >
                     <Upload className="h-4 w-4" />
-                    {imapLoading ? t("import.importing") : t("importPage.importSources")}
+                    {imapLoading || imapJobRunning ? t("import.importing") : t("importPage.importSources")}
                   </Button>
+                  {imapJob && imapJobStep && (
+                    <div className="space-y-3" aria-live="polite">
+                      <div className="space-y-1 text-xs text-neutral-500">
+                        <div className="flex justify-between gap-4">
+                          <span>
+                            {imapJob.status === "running"
+                              ? t("importPage.importingSourceProgress", {
+                                  source: imapJobStep.label,
+                                  processed: imapJobStep.processed,
+                                  total: imapJobStep.total ?? "?",
+                                })
+                              : t("importPage.importedSource", { source: imapJobStep.label })}
+                          </span>
+                          <span>
+                            {imapJobCompletedSteps}/{imapJob.steps.length}
+                          </span>
+                        </div>
+                        <div className="h-1.5 overflow-hidden rounded-full bg-neutral-100">
+                          <div
+                            className="h-full bg-blue-600 transition-[width]"
+                            style={{
+                              width: `${Math.round((imapJobCompletedSteps / imapJob.steps.length) * 100)}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                      {imapJob.status === "running" && !imapJob.stalled && (
+                        <p className="text-xs leading-5 text-neutral-500">
+                          {t("importPage.backgroundNote")}
+                        </p>
+                      )}
+                      {imapJob.stalled && (
+                        <p className="rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                          {t("importPage.stalled")}
+                        </p>
+                      )}
+                      {imapJob.status === "failed" && (
+                        <p className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+                          {t("importPage.jobFailed", { reason: imapJob.error ?? t("importPage.imapFailed") })}
+                        </p>
+                      )}
+                      {imapJob.status === "cancelled" && (
+                        <p className="rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-700">
+                          {t("importPage.cancelled")}
+                        </p>
+                      )}
+                      {imapJob.status !== "running" && (
+                        <p className="rounded-lg border border-green-100 bg-green-50 px-4 py-3 text-sm text-green-700">
+                          {formatImportResult({ imported: imapJob.imported, skipped: imapJob.skipped }, t)}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        {imapJob.status === "running" && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={imapJobBusy || imapJob.cancelRequested}
+                            onClick={() => updateImapJob(cancelImapImportJob)}
+                          >
+                            {imapJob.cancelRequested ? t("importPage.cancelling") : t("importPage.cancelImport")}
+                          </Button>
+                        )}
+                        {imapJobResumable && (
+                          <Button
+                            type="button"
+                            disabled={imapJobBusy || !imapForm.password}
+                            onClick={() => updateImapJob((id) => resumeImapImportJob(id, imapForm))}
+                          >
+                            {t("importPage.resumeImport")}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   {imapProgress && (
                     <div
                       className="space-y-1 text-xs text-neutral-500"

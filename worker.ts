@@ -24,6 +24,7 @@ import { runTrashRetention } from "./src/lib/email/trash-retention";
 import { runDriveTrashRetention } from "./src/lib/drive/retention";
 import { runAccountRetention } from "./src/lib/accounts/deletion";
 import { runJmapChangeRetention } from "./src/lib/jmap/changes";
+import { isImapImportJobMessage, processImapImportJob } from "./src/lib/import/imap-jobs";
 export { RealtimeHub } from "./src/lib/realtime/hub";
 
 export default {
@@ -109,6 +110,8 @@ export default {
 					await processInboundMessage(env, msg.body);
 				} else if (typeof msg.body === "object" && msg.body !== null && (msg.body as { kind?: unknown }).kind === "agent.draft" && typeof (msg.body as { jobId?: unknown }).jobId === "string") {
 					await processAgentDraftJob(env, (msg.body as { jobId: string }).jobId);
+				} else if (isImapImportJobMessage(msg.body)) {
+					await processImapImportJob(env, msg.body);
 				} else if (isWebhookRetryMessage(msg.body)) {
 					await processWebhookRetry(env, msg.body as WebhookRetryMessage);
 				} else if (typeof msg.body === "object" && msg.body !== null && (msg.body as { kind?: unknown }).kind === "email.scheduled") {

@@ -7,6 +7,7 @@ import { getUserFromSession } from "@/lib/auth/session";
 import { getSessionTokenFromRequest } from "@/lib/realtime/utils";
 import { processInboundMessage } from "@/lib/email/inbound";
 import { processAgentDraftJob } from "@/lib/agent/jobs/utils";
+import { isImapImportJobMessage, processImapImportJob } from "@/lib/import/imap-jobs";
 import { processOutboundQueue, type OutboundQueueMessage } from "@/lib/email/send";
 import { processWebhookRetry, type WebhookRetryMessage } from "@/lib/email/webhooks";
 import { isInboundQueueMessage, isWebhookRetryMessage } from "../worker-utils";
@@ -40,6 +41,7 @@ async function main() {
 	});
 	runtime.agentQueue.setConsumer(async (body) => {
 		if (typeof body === "object" && body !== null && (body as { kind?: unknown }).kind === "agent.draft" && typeof (body as { jobId?: unknown }).jobId === "string") await processAgentDraftJob(env, (body as { jobId: string }).jobId);
+		else if (isImapImportJobMessage(body)) await processImapImportJob(env, body);
 	});
 
 	const app = next({ dev, dir: process.cwd(), hostname: host, port });

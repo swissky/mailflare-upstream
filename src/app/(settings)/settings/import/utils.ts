@@ -3,6 +3,8 @@ import { authFetch } from "@/lib/auth/client";
 import { getMailboxFolders, invalidateFolderCache } from "@/lib/folders/client";
 import type {
 	ImapFormState,
+	ImapImportJobState,
+	ImapImportJobStepInput,
 	ImportFolderSummary,
 	ImportResult,
 	ImportSourceItem,
@@ -130,6 +132,84 @@ async function readImportJson<T extends { error?: string }>(response: Response):
 		const status = response.status === 503 ? "the Worker exceeded its resource limits" : `HTTP ${response.status}`;
 		throw new Error(`Import request failed (${status}). Try again with a smaller batch size.`);
 	}
+}
+
+const IMAP_JOB_STORAGE_KEY = "mailflare:imap-import-job";
+
+export function getStoredImapImportJobId(): string | null {
+	try {
+		return window.localStorage.getItem(IMAP_JOB_STORAGE_KEY);
+	} catch {
+		return null;
+	}
+}
+
+export function storeImapImportJobId(id: string | null): void {
+	try {
+		if (id) window.localStorage.setItem(IMAP_JOB_STORAGE_KEY, id);
+		else window.localStorage.removeItem(IMAP_JOB_STORAGE_KEY);
+	} catch {
+		// Storage can be unavailable in private windows; the job still runs.
+	}
+}
+
+function imapConnectionBody(form: ImapFormState) {
+	return {
+		host: form.host,
+		port: Number(form.port),
+		secure: form.secure,
+		username: form.username,
+		password: form.password,
+	};
+}
+
+/** Starts a server-side import job, or returns null when this deployment has no job queue. */
+export async function startImapImportJob(
+	mailboxId: string,
+	form: ImapFormState,
+	steps: ImapImportJobStepInput[],
+): Promise<ImapImportJobState | null> {
+	const response = await authFetch("/api/import/imap/jobs", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			mailboxId,
+			...imapConnectionBody(form),
+			limit: Number(form.limit),
+			importAll: form.importAll,
+			steps,
+		}),
+	});
+	if (response.status === 501) return null;
+	const data = await readImportJson<{ job?: ImapImportJobState; error?: string }>(response);
+	if (!response.ok || !data.job) throw new Error(data.error ?? "Unable to start the IMAP import");
+	return data.job;
+}
+
+export async function fetchImapImportJob(id: string): Promise<ImapImportJobState | null> {
+	const response = await authFetch(`/api/import/imap/jobs/${encodeURIComponent(id)}`);
+	if (response.status === 404) return null;
+	const data = await readImportJson<{ job?: ImapImportJobState; error?: string }>(response);
+	if (!response.ok || !data.job) throw new Error(data.error ?? "Unable to load the IMAP import");
+	return data.job;
+}
+
+export async function cancelImapImportJob(id: string): Promise<ImapImportJobState> {
+	const response = await authFetch(`/api/import/imap/jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
+	const data = await readImportJson<{ job?: ImapImportJobState; error?: string }>(response);
+	if (!response.ok || !data.job) throw new Error(data.error ?? "Unable to cancel the IMAP import");
+	return data.job;
+}
+
+export async function resumeImapImportJob(id: string, form: ImapFormState): Promise<ImapImportJobState> {
+	const response = await authFetch(`/api/import/imap/jobs/${encodeURIComponent(id)}`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(imapConnectionBody(form)),
+	});
+	const data = await readImportJson<{ job?: ImapImportJobState; error?: string }>(response);
+	if (!response.ok || !data.job) throw new Error(data.error ?? "Unable to resume the IMAP import");
+	return data.job;
 }
 
 export async function fetchImapFolders(form: ImapFormState): Promise<string[]> {

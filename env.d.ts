@@ -3,7 +3,8 @@ interface CloudflareEnv {
 	EMAIL: SendEmail;
 	BUCKET: R2Bucket;
 	INBOUND_QUEUE: Queue<import("./src/lib/email/inbound").InboundQueueMessage>;
-	AGENT_QUEUE?: Queue<{ kind: "agent.draft"; jobId: string }>;
+	// Also carries background IMAP import batches, so importing needs no extra queue.
+	AGENT_QUEUE?: Queue<{ kind: "agent.draft"; jobId: string } | import("./src/lib/import/imap-job-types").ImapImportJobMessage>;
 	AI?: Ai;
 	AI_MODEL?: string;
 	AI_BASE_URL?: string;
